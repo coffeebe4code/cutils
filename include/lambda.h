@@ -1,4 +1,6 @@
 #pragma once
+#define _POSIX_C_SOURCE 200809L
+#include <stdlib.h>
 
 #define lambda(ret_type, name, args, _body)                                    \
   ret_type(*name) args = ({ ret_type _ args _body _; })

@@ -5,6 +5,7 @@
 
 int main(int argc, char **argv) {
   FEATURE("lambda");
+  FEATURE("lifetime");
   LIB("lambda");
   BOOTSTRAP(argc, argv);
   return 0;

@@ -5,13 +5,15 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <getopt.h>
-#include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #define PATH_SEP "/"
 
+#ifndef PREFIX
+#define PREFIX "/usr/local"
+#endif
 #ifndef CFLAGS
 #define CFLAGS "-Wall", "-Werror", "-std=c11"
 #endif
@@ -41,6 +43,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -54,7 +57,7 @@
 
 // typedefs
 typedef pid_t Pid;
-typedef int Fd;
+typedef FILE *Fd;
 typedef const char *Cstr;
 typedef struct {
   short failure_total;
@@ -74,20 +77,26 @@ typedef struct {
 
 // statics
 static int test_result_status __attribute__((unused)) = 0;
-static struct option flags[] = {
-    {"build", required_argument, 0, 'b'}, {"init", no_argument, 0, 'i'},
-    {"clean", no_argument, 0, 'c'},       {"exe", required_argument, 0, 'e'},
-    {"release", no_argument, 0, 'r'},     {"add", required_argument, 0, 'a'},
-    {"debug", no_argument, 0, 'd'}};
+static struct option flags[] = {{"build", required_argument, 0, 'b'},
+                                {"init", no_argument, 0, 'i'},
+                                {"clean", no_argument, 0, 'c'},
+                                {"exe", required_argument, 0, 'e'},
+                                {"release", no_argument, 0, 'r'},
+                                {"add", required_argument, 0, 'a'},
+                                {"debug", no_argument, 0, 'd'},
+                                {"pack", optional_argument, 0, 'p'},
+                                {"total-internal", optional_argument, 0, 't'}};
 
 static result_t results = {0, 0};
 static Cstr_Array *features = NULL;
 static Cstr_Array libs = {.elems = 0, .count = 0};
 static Cstr_Array *deps = NULL;
+static Cstr_Array *vends = NULL;
 static Cstr_Array *exes = NULL;
 static size_t feature_count = 0;
 static size_t deps_count = 0;
 static size_t exe_count = 0;
+static size_t vend_count = 0;
 static clock_t start = 0;
 
 // forwards
@@ -100,13 +109,19 @@ Cstr cstr_no_ext(Cstr path);
 Cstr_Array cstr_array_make(Cstr first, ...);
 Cstr_Array cstr_array_append(Cstr_Array cstrs, Cstr cstr);
 Cstr cstr_array_join(Cstr sep, Cstr_Array cstrs);
-Fd fd_open_for_read(Cstr path);
+Fd fd_open_for_read(Cstr path, int exit);
 Fd fd_open_for_write(Cstr path);
 void fd_close(Fd fd);
 void release();
+void pull(Cstr name, Cstr sha);
+void build_vend(Cstr name, Cstr nobuild_flag);
+void handle_vend(Cstr nobuild_flag);
+void clone(Cstr name, Cstr repo);
 void debug();
 void build(Cstr_Array comp_flags);
+void package(Cstr prefix);
 void obj_build(Cstr feature, Cstr_Array comp_flags);
+void vend_build(Cstr vend, Cstr_Array comp_flags);
 void test_build(Cstr feature, Cstr_Array comp_flags, Cstr_Array feature_links);
 void exe_build(Cstr feature, Cstr_Array comp_flags, Cstr_Array deps);
 Cstr_Array deps_get_lifted(Cstr file, Cstr_Array processed);
@@ -115,6 +130,7 @@ void static_build(Cstr feature, Cstr_Array flags, Cstr_Array deps);
 void manual_deps(Cstr feature, Cstr_Array deps);
 void add_feature(Cstr_Array val);
 void add_exe(Cstr_Array val);
+void add_vend(Cstr_Array val);
 void pid_wait(Pid pid);
 void test_pid_wait(Pid pid);
 int handle_args(int argc, char **argv);
@@ -124,7 +140,7 @@ void write_report();
 void create_folders();
 Cstr parse_feature_from_path(Cstr path);
 Cstr cmd_show(Cmd cmd);
-Pid cmd_run_async(Cmd cmd, Fd *fdin, Fd *fdout);
+Pid cmd_run_async(Cmd cmd);
 void cmd_run_sync(Cmd cmd);
 void test_run_sync(Cmd cmd);
 int path_is_dir(Cstr path);
@@ -186,6 +202,12 @@ void OKAY(Cstr fmt, ...) NOBUILD_PRINTF_FORMAT(1, 2);
 #define LIB(feature)                                                           \
   do {                                                                         \
     libs = cstr_array_append(libs, feature);                                   \
+  } while (0)
+
+#define VEND(vendor, repo, hash)                                               \
+  do {                                                                         \
+    Cstr_Array v = cstr_array_make(vendor, repo, hash, NULL);                  \
+    add_vend(v);                                                               \
   } while (0)
 
 #define STATIC(feature)                                                        \
@@ -326,7 +348,7 @@ void OKAY(Cstr fmt, ...) NOBUILD_PRINTF_FORMAT(1, 2);
     struct dirent *dp = NULL;                                                  \
     DIR *dir = opendir(dirpath);                                               \
     if (dir == NULL) {                                                         \
-      PANIC("could not open directory %s: %s", dirpath, strerror(errno));      \
+      PANIC("could not open directory %s: %d", dirpath, errno);                \
     }                                                                          \
     errno = 0;                                                                 \
     while ((dp = readdir(dir))) {                                              \
@@ -336,22 +358,28 @@ void OKAY(Cstr fmt, ...) NOBUILD_PRINTF_FORMAT(1, 2);
       }                                                                        \
     }                                                                          \
     if (errno > 0) {                                                           \
-      PANIC("could not read directory %s: %s", dirpath, strerror(errno));      \
+      PANIC("could not read directory %s: %d", dirpath, errno);                \
     }                                                                          \
     closedir(dir);                                                             \
   } while (0)
 
 #ifdef WITH_MOCKING
 #ifndef NO_MOCKING
+#define Comma ,
 #define DECLARE_MOCK(type, name)                                               \
   type __var_##name[255];                                                      \
   size_t __var_##name##_inc = 0;                                               \
   size_t __var_##name##_actual = 0;                                            \
   type name() { return __var_##name[__var_##name##_inc++]; }
-#else
-#define DECLARE_MOCK(type, name) type __var__##name;
-#endif
+#define DECLARE_MOCK_T(def, type) typedef struct def type;
 #define MOCK(name, value) __var_##name[__var_##name##_actual++] = value;
+#define MOCK_T(type, value, name) type name = value;
+#else
+#define DECLARE_MOCK(type, name)
+#define DECLARE_MOCK_T(def, type)
+#define MOCK(name, value)
+#define MOCK_T(type, value)
+#endif
 
 #endif
 
@@ -404,15 +432,14 @@ void create_folders() {
 void update_results() {
   for (size_t i = 0; i < feature_count; i++) {
     Fd fd = fd_open_for_read(
-        CONCAT("target/nobuild/", features[i].elems[0], ".report"));
-    FILE *fp = fdopen(fd, "r");
+        CONCAT("target/nobuild/", features[i].elems[0], ".report"), 1);
     int number;
-    if (fscanf(fp, "%d", &number) == 0) {
-      PANIC("couldn't write to file %s",
+    if (fscanf((FILE *)fd, "%d", &number) == 0) {
+      PANIC("couldn't read from file %s",
             CONCAT("target/nobuild/", features[i].elems[0], ".report"));
     }
     results.passed_total += number;
-    fclose(fp);
+    fclose(fd);
   }
 }
 
@@ -440,6 +467,19 @@ void add_exe(Cstr_Array val) {
     PANIC("could not allocate memory: %s", strerror(errno));
   }
   memcpy(&exes[exe_count - 1], &val, sizeof(Cstr_Array));
+}
+
+void add_vend(Cstr_Array val) {
+  if (vends == NULL) {
+    vends = malloc(sizeof(Cstr_Array));
+    vend_count++;
+  } else {
+    vends = realloc(vends, sizeof(Cstr_Array) * ++vend_count);
+  }
+  if (vends == NULL || val.count == 0) {
+    PANIC("could not allocate memory: %s", strerror(errno));
+  }
+  memcpy(&vends[vend_count - 1], &val, sizeof(Cstr_Array));
 }
 
 Cstr_Array cstr_array_make(Cstr first, ...) {
@@ -527,30 +567,28 @@ Cstr cstr_array_join(Cstr sep, Cstr_Array cstrs) {
   return result;
 }
 
-Fd fd_open_for_read(Cstr path) {
-  Fd result = open(path, O_RDONLY);
-  if (result < 0) {
-    PANIC("Could not open file %s: %s", path, strerror(errno));
+Fd fd_open_for_read(Cstr path, int exit) {
+  Fd result = fopen(path, "r+");
+  if (result == NULL && exit) {
+    PANIC("Could not open file %s: %d", path, errno);
   }
   return result;
 }
 
 Fd fd_open_for_write(Cstr path) {
-  Fd result = open(path, O_WRONLY | O_CREAT | O_TRUNC,
-                   S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  if (result < 0) {
-    PANIC("could not open file %s: %s", path, strerror(errno));
+  Fd result = fopen(path, "w+");
+  if (result == NULL) {
+    PANIC("could not open file %s: %d", path, errno);
   }
   return result;
 }
 
-void fd_close(Fd fd) { close(fd); }
+void fd_close(Fd fd) { fclose(fd); }
 
 void write_report(Cstr file) {
   Fd fd = fd_open_for_write(file);
-  FILE *fp = fdopen(fd, "a");
-  fprintf(fp, "%d", results.passed_total);
-  fclose(fp);
+  fprintf(fd, "%d", results.passed_total);
+  fclose(fd);
 }
 
 int handle_args(int argc, char **argv) {
@@ -558,7 +596,7 @@ int handle_args(int argc, char **argv) {
   int found = 0;
   int option_index;
 
-  while ((opt_char = getopt_long(argc, argv, "ce:ia:b:dr", flags,
+  while ((opt_char = getopt_long(argc, argv, "t:ce:ia:b:drp::", flags,
                                  &option_index)) != -1) {
     found = 1;
     switch ((int)opt_char) {
@@ -568,8 +606,8 @@ int handle_args(int argc, char **argv) {
       break;
     }
     case 'b': {
+      handle_vend("-d");
       Cstr parsed = parse_feature_from_path(optarg);
-      INFO("parsed, (%s)", parsed);
       Cstr_Array all = CSTRS();
       all = incremental_build(parsed, all);
       Cstr_Array local_comp = cstr_array_make(DCOMP, NULL);
@@ -607,11 +645,13 @@ int handle_args(int argc, char **argv) {
     }
     case 'r': {
       create_folders();
+      handle_vend("-r");
       release();
       break;
     }
     case 'd': {
       create_folders();
+      handle_vend("-d");
       debug();
       break;
     }
@@ -625,6 +665,22 @@ int handle_args(int argc, char **argv) {
     }
     case 'i': {
       initialize();
+      break;
+    }
+    case 'p': {
+      if (optarg == NULL) {
+        option_index = argc - 1;
+        if (argv[option_index][0] == '-') {
+          optarg = PREFIX;
+        } else {
+          optarg = argv[option_index++];
+        }
+      }
+      package(optarg);
+      break;
+    }
+    case 't': {
+      handle_vend("-d");
       break;
     }
     default: {
@@ -647,11 +703,12 @@ void initialize() {
   MKDIRS("src");
   MKDIRS("tests");
   MKDIRS("include");
-  Cmd cmd = {
-      .line = cstr_array_make(
-          "/bin/bash", "-c",
-          "echo -e '\n# nobuild\nnobuild\ntarget\ndeps\nobj\n' >> .gitignore",
-          NULL)};
+  MKDIRS("vend");
+  Cmd cmd = {.line = cstr_array_make(
+                 "/bin/bash", "-c",
+                 "echo -e '\n# nobuild\nnobuild\ntarget\ndeps\nobj\nvend\n' >> "
+                 ".gitignore",
+                 NULL)};
   cmd_run_sync(cmd);
 }
 
@@ -691,7 +748,7 @@ void test_pid_wait(Pid pid) {
   for (;;) {
     int wstatus = 0;
     if (waitpid(pid, &wstatus, 0) < 0) {
-      PANIC("could not wait on command (pid %d): %s", pid, strerror(errno));
+      PANIC("could not wait on command (pid %d): %d", pid, errno);
     }
 
     if (WIFEXITED(wstatus)) {
@@ -701,10 +758,26 @@ void test_pid_wait(Pid pid) {
     }
 
     if (WIFSIGNALED(wstatus)) {
-      PANIC("command process was terminated by %s",
-            strsignal(WTERMSIG(wstatus)));
+      PANIC("command process was terminated by %d", WTERMSIG(wstatus));
     }
   }
+}
+
+void package(Cstr prefix) {
+  MKDIRS(CONCAT(prefix));
+  size_t len = strlen(prefix);
+  if (prefix[len - 1] != '/') {
+    prefix = CONCAT(prefix, "/");
+  }
+  MKDIRS(CONCAT(prefix, "lib"));
+  MKDIRS(CONCAT(prefix, "include"));
+  for (size_t i = 0; i < libs.count; i++) {
+    CMD("cp", CONCAT("target/lib", libs.elems[i], ".so"),
+        CONCAT(prefix, "lib/"));
+    CMD("cp", CONCAT("include/", libs.elems[i], ".h"),
+        CONCAT(prefix, "include/"));
+  }
+  INFO("Installed");
 }
 
 void obj_build(Cstr feature, Cstr_Array comp_flags) {
@@ -853,7 +926,10 @@ void exe_build(Cstr exe, Cstr_Array comp_flags, Cstr_Array exe_deps) {
   cmd_run_sync(cmd);
 }
 
-void release() { build(cstr_array_make(RCOMP, NULL)); }
+void release() {
+  handle_vend("-r");
+  build(cstr_array_make(RCOMP, NULL));
+}
 
 Cstr_Array incremental_build(Cstr parsed, Cstr_Array processed) {
   processed = cstr_array_append(processed, parsed);
@@ -867,7 +943,77 @@ Cstr_Array incremental_build(Cstr parsed, Cstr_Array processed) {
   return processed;
 }
 
-void debug() { build(cstr_array_make(DCOMP, NULL)); }
+void debug() {
+  handle_vend("-d");
+  build(cstr_array_make(DCOMP, NULL));
+}
+
+void pull(Cstr name, Cstr sha) {
+  INFO("updating vend .. %s", name);
+  if (chdir(CONCAT("vend/", name)) != 0) {
+    PANIC("Failed to change directory %s", CONCAT("vend/", name));
+  }
+  CMD("git", "fetch");
+  CMD("git", "checkout", sha);
+  if (chdir("../..") != 0) {
+    PANIC("Failed to change directory %s", "../..");
+  }
+}
+
+void build_vend(Cstr name, Cstr nobuild_flag) {
+  if (chdir(CONCAT("vend/", name)) != 0) {
+    PANIC("Failed to change directory %s", CONCAT("vend/", name));
+  }
+  CMD(CC, "-O3", "./nobuild.c", "-o", "./nobuild");
+  CMD("./nobuild", nobuild_flag, "-p");
+  if (chdir("../..") != 0) {
+    PANIC("Failed to change directory %s", "../..");
+  }
+}
+
+void handle_vend(Cstr nobuild_flag) {
+  for (size_t i = 0; i < vend_count; i++) {
+    Fd fp = fd_open_for_read(CONCAT("target/nobuild/", vends[i].elems[0]), 0);
+    if (fp == NULL) {
+      DIR *dir = opendir(CONCAT("vend/", vends[i].elems[0]));
+      if (dir == NULL) {
+        clone(vends[i].elems[0], vends[i].elems[1]);
+      }
+      pull(vends[i].elems[0], vends[i].elems[2]);
+      build_vend(vends[i].elems[0], nobuild_flag);
+      Fd fd = fd_open_for_write(CONCAT("target/nobuild/", vends[i].elems[0]));
+      fprintf(fd, "%s", vends[i].elems[2]);
+      fclose(fd);
+    }
+    rewind(fp);
+    char sha;
+
+    if (fscanf((FILE *)fp, "%s", &sha) == 0) {
+      PANIC("Couldn't extract sha from build cache");
+    }
+    if (strncmp(vends[i].elems[2], &sha, strlen(&sha)) != 0) {
+      DIR *dir = opendir(CONCAT("vend/", vends[i].elems[0]));
+      if (dir == NULL) {
+        clone(vends[i].elems[0], vends[i].elems[1]);
+      }
+      pull(vends[i].elems[0], vends[i].elems[2]);
+      build_vend(vends[i].elems[0], nobuild_flag);
+      Fd fd = fd_open_for_write(CONCAT("target/nobuild/", vends[i].elems[0]));
+      fprintf(fd, "%s", vends[i].elems[2]);
+      fclose(fd);
+    }
+  }
+}
+
+void clone(Cstr name, Cstr repo) {
+  if (chdir("vend/") != 0) {
+    PANIC("Failed to change directory %s", "vend/");
+  }
+  CMD("git", "clone", repo, name);
+  if (chdir("../..") != 0) {
+    PANIC("Failed to change directory %s", "../..");
+  }
+}
 
 void build(Cstr_Array comp_flags) {
   Cstr_Array links = CSTRS();
@@ -898,7 +1044,7 @@ void pid_wait(Pid pid) {
   for (;;) {
     int wstatus = 0;
     if (waitpid(pid, &wstatus, 0) < 0) {
-      PANIC("could not wait on command (pid %d): %s", pid, strerror(errno));
+      PANIC("could not wait on command (pid %d): %d", pid, errno);
     }
     if (WIFEXITED(wstatus)) {
       int exit_status = WEXITSTATUS(wstatus);
@@ -908,15 +1054,14 @@ void pid_wait(Pid pid) {
       break;
     }
     if (WIFSIGNALED(wstatus)) {
-      PANIC("command process was terminated by %s",
-            strsignal(WTERMSIG(wstatus)));
+      PANIC("command process was terminated by %d", WTERMSIG(wstatus));
     }
   }
 }
 
 Cstr cmd_show(Cmd cmd) { return cstr_array_join(" ", cmd.line); }
 
-Pid cmd_run_async(Cmd cmd, Fd *fdin, Fd *fdout) {
+Pid cmd_run_async(Cmd cmd) {
   pid_t cpid = fork();
   if (cpid < 0) {
     PANIC("Could not fork child process: %s: %s", cmd_show(cmd),
@@ -924,26 +1069,15 @@ Pid cmd_run_async(Cmd cmd, Fd *fdin, Fd *fdout) {
   }
   if (cpid == 0) {
     Cstr_Array args = cstr_array_append(cmd.line, NULL);
-    if (fdin) {
-      if (dup2(*fdin, STDIN_FILENO) < 0) {
-        PANIC("Could not setup stdin for child process: %s", strerror(errno));
-      }
-    }
-    if (fdout) {
-      if (dup2(*fdout, STDOUT_FILENO) < 0) {
-        PANIC("Could not setup stdout for child process: %s", strerror(errno));
-      }
-    }
     if (execvp(args.elems[0], (char *const *)args.elems) < 0) {
-      PANIC("Could not exec child process: %s: %s", cmd_show(cmd),
-            strerror(errno));
+      PANIC("Could not exec child process: %s: %d", cmd_show(cmd), errno);
     }
   }
   return cpid;
 }
 
-void cmd_run_sync(Cmd cmd) { pid_wait(cmd_run_async(cmd, NULL, NULL)); }
-void test_run_sync(Cmd cmd) { test_pid_wait(cmd_run_async(cmd, NULL, NULL)); }
+void cmd_run_sync(Cmd cmd) { pid_wait(cmd_run_async(cmd)); }
+void test_run_sync(Cmd cmd) { test_pid_wait(cmd_run_async(cmd)); }
 
 int path_is_dir(Cstr path) {
   struct stat statbuf = {0};

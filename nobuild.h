@@ -1010,7 +1010,7 @@ void clone(Cstr name, Cstr repo) {
     PANIC("Failed to change directory %s", "vend/");
   }
   CMD("git", "clone", repo, name);
-  if (chdir("../..") != 0) {
+  if (chdir("..") != 0) {
     PANIC("Failed to change directory %s", "../..");
   }
 }

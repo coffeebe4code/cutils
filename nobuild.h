@@ -695,6 +695,7 @@ int handle_args(int argc, char **argv) {
     create_folders();
     debug();
   }
+  INFO("return");
   return 0;
 }
 
@@ -982,11 +983,14 @@ void handle_vend(Cstr nobuild_flag) {
       }
       pull(vends[i].elems[0], vends[i].elems[2]);
       build_vend(vends[i].elems[0], nobuild_flag);
+      INFO("create file");
       Fd fd = fd_open_for_write(CONCAT("target/nobuild/", vends[i].elems[0]));
       fprintf(fd, "%s", vends[i].elems[2]);
       fclose(fd);
+      INFO("close file");
     }
-    rewind(fp);
+    fclose(fp);
+    fp = fd_open_for_read(CONCAT("target/nobuild/", vends[i].elems[0]), 0);
     char sha;
 
     if (fscanf((FILE *)fp, "%s", &sha) == 0) {

@@ -988,9 +988,13 @@ void handle_vend(Cstr nobuild_flag) {
       fprintf(fd, "%s", vends[i].elems[2]);
       fclose(fd);
       INFO("close file");
+      INFO("saved this file %s", CONCAT("target/nobuild/", vends[i].elems[0]));
     }
+
+    INFO("close fp");
     fclose(fp);
     fp = fd_open_for_read(CONCAT("target/nobuild/", vends[i].elems[0]), 0);
+    INFO("opened fp %s", CONCAT("target/nobuild/", vends[i].elems[0]));
     char sha;
 
     if (fscanf((FILE *)fp, "%s", &sha) == 0) {

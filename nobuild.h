@@ -680,6 +680,7 @@ int handle_args(int argc, char **argv) {
       break;
     }
     case 't': {
+      INFO("starting test run");
       handle_vend("-d");
       break;
     }
@@ -991,7 +992,8 @@ void handle_vend(Cstr nobuild_flag) {
     if (fscanf((FILE *)fp, "%s", &sha) == 0) {
       PANIC("Couldn't extract sha from build cache");
     }
-    if (strncmp(vends[i].elems[2], &sha, strlen(&sha)) != 0) {
+    INFO("sha 1 %s, 2 %s", vends[i].elems[2], &sha);
+    if (strcmp(vends[i].elems[2], &sha) != 0) {
       DIR *dir = opendir(CONCAT("vend/", vends[i].elems[0]));
       if (dir == NULL) {
         clone(vends[i].elems[0], vends[i].elems[1]);

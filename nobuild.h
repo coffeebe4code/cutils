@@ -605,6 +605,8 @@ int handle_args(int argc, char **argv) {
     INFO("opt char %c", opt_char);
     switch ((int)opt_char) {
     case 'c': {
+      INFO("c");
+
       c = 1;
       break;
     }
@@ -618,6 +620,7 @@ int handle_args(int argc, char **argv) {
       break;
     }
     case 'd': {
+      INFO("d");
       d = 1;
       break;
     }
@@ -634,6 +637,7 @@ int handle_args(int argc, char **argv) {
       break;
     }
     case 'p': {
+      INFO("p");
       if (optarg == NULL) {
         option_index = argc - 1;
         if (argv[option_index][0] == '-') {

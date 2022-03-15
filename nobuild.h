@@ -659,7 +659,9 @@ int handle_args(int argc, char **argv) {
     }
     }
   }
+  INFO("vals %d %d %d %d %d", c, b, r, d, p);
   if (c) {
+    INFO("Here");
     CLEAN();
     create_folders();
   }

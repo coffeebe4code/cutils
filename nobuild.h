@@ -602,6 +602,7 @@ int handle_args(int argc, char **argv) {
   while ((opt_char = getopt_long(argc, argv, "t:ce:ia:b:drp::", flags,
                                  &option_index)) != -1) {
     found = 1;
+    INFO("opt char %c", opt_char);
     switch ((int)opt_char) {
     case 'c': {
       c = 1;

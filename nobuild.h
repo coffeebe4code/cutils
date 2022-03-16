@@ -596,7 +596,11 @@ int handle_args(int argc, char **argv) {
   int opt_char = -1;
   int found = 0;
   int option_index;
-  int c, b, r, d, p = 0;
+  int c = 0;
+  int b = 0;
+  int r = 0;
+  int d = 0;
+  int p = 0;
   char opt_b[256] = {0};
   INFO("vals at start %d %d %d %d %d", c, b, r, d, p);
 
@@ -641,6 +645,7 @@ int handle_args(int argc, char **argv) {
     }
     case 'p': {
       INFO("p");
+      INFO("vals in p before optarg %d %d %d %d %d", c, b, r, d, p);
       if (optarg == NULL) {
         option_index = argc - 1;
         if (argv[option_index][0] == '-') {

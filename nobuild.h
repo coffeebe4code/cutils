@@ -81,6 +81,7 @@ static struct option flags[] = {{"build", required_argument, 0, 'b'},
                                 {"init", no_argument, 0, 'i'},
                                 {"clean", no_argument, 0, 'c'},
                                 {"exe", required_argument, 0, 'e'},
+                                {"fetch", required_argument, 0, 'f'},
                                 {"release", no_argument, 0, 'r'},
                                 {"add", required_argument, 0, 'a'},
                                 {"debug", no_argument, 0, 'd'},
@@ -602,32 +603,26 @@ int handle_args(int argc, char **argv) {
   int d = 0;
   int p = 0;
   char opt_b[256] = {0};
-  INFO("vals at start %d %d %d %d %d", c, b, r, d, p);
+  this_prefix = PREFIX;
 
-  while ((opt_char = getopt_long(argc, argv, "t:ce:ia:b:drp::", flags,
+  while ((opt_char = getopt_long(argc, argv, "t:ce:ia:f:b:drp::", flags,
                                  &option_index)) != -1) {
     found = 1;
-    INFO("opt char %c", opt_char);
     switch ((int)opt_char) {
     case 'c': {
-      INFO("c");
-
       c = 1;
       break;
     }
     case 'b': {
-      INFO("b");
       strcpy(opt_b, optarg);
       b = 1;
       break;
     }
     case 'r': {
-      INFO("r");
       r = 1;
       break;
     }
     case 'd': {
-      INFO("d");
       d = 1;
       break;
     }
@@ -643,9 +638,20 @@ int handle_args(int argc, char **argv) {
       initialize();
       break;
     }
+    case 'f': {
+      for (size_t i = 0; i < vend_count; i++) {
+        if (strcmp(vends[i].elems[0], optarg) == 0) {
+          pull(vends[i].elems[0], vends[i].elems[2]);
+          build_vend(vends[i].elems[0], "-d");
+          Fd fd =
+              fd_open_for_write(CONCAT("target/nobuild/", vends[i].elems[0]));
+          fprintf(fd, "%s", vends[i].elems[2]);
+          fclose(fd);
+        }
+      }
+      break;
+    }
     case 'p': {
-      INFO("p");
-      INFO("vals in p before optarg %d %d %d %d %d", c, b, r, d, p);
       if (optarg == NULL) {
         option_index = argc - 1;
         if (argv[option_index][0] == '-') {
@@ -656,7 +662,6 @@ int handle_args(int argc, char **argv) {
       }
       strcpy(this_prefix, optarg);
       p = 1;
-      INFO("vals in p %d %d %d %d %d", c, b, r, d, p);
       break;
     }
     case 't': {
@@ -668,9 +673,7 @@ int handle_args(int argc, char **argv) {
     }
     }
   }
-  INFO("vals %d %d %d %d %d", c, b, r, d, p);
   if (c) {
-    INFO("Here");
     CLEAN();
     create_folders();
   }
@@ -722,6 +725,7 @@ int handle_args(int argc, char **argv) {
   if (p) {
     package(this_prefix);
   }
+
   if (found == 0) {
     WARN("No arguments passed to nobuild");
     WARN("Building all features");
@@ -999,7 +1003,6 @@ void build_vend(Cstr name, Cstr nobuild_flag) {
     PANIC("Failed to change directory %s", CONCAT("vend/", name));
   }
   CMD(CC, "-O3", "./nobuild.c", "-o", "./nobuild");
-  INFO("this_prefix (%s)", this_prefix);
   CMD("./nobuild", nobuild_flag, "-p", this_prefix);
   if (chdir("../..") != 0) {
     PANIC("Failed to change directory %s", "../..");

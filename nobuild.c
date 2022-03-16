@@ -4,9 +4,8 @@
 #include "./nobuild.h"
 
 int main(int argc, char **argv) {
-  FEATURE("lambda");
   FEATURE("lifetime");
-  LIB("lambda");
+  LIB("lifetime");
   BOOTSTRAP(argc, argv);
   return 0;
 }

@@ -611,11 +611,13 @@ int handle_args(int argc, char **argv) {
       break;
     }
     case 'b': {
+      INFO("b");
       strcpy(opt_b, optarg);
       b = 1;
       break;
     }
     case 'r': {
+      INFO("r");
       r = 1;
       break;
     }

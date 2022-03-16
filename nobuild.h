@@ -598,6 +598,7 @@ int handle_args(int argc, char **argv) {
   int option_index;
   int c, b, r, d, p = 0;
   char opt_b[256] = {0};
+  INFO("vals at start %d %d %d %d %d", c, b, r, d, p);
 
   while ((opt_char = getopt_long(argc, argv, "t:ce:ia:b:drp::", flags,
                                  &option_index)) != -1) {
@@ -650,6 +651,7 @@ int handle_args(int argc, char **argv) {
       }
       strcpy(this_prefix, optarg);
       p = 1;
+      INFO("vals in p %d %d %d %d %d", c, b, r, d, p);
       break;
     }
     case 't': {
